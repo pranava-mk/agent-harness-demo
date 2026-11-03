@@ -1,0 +1,4 @@
+# The only runtime dependency: the Ollama Python client (talks to the local
+# Ollama server). Everything else — the agent loop, RAG, tools, chat REPL — is
+# pure Python standard library, on purpose, so the mechanism stays transparent.
+ollama>=0.3.0
