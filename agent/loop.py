@@ -35,16 +35,27 @@ class Agent:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.knowledge = Knowledge().build() if use_rag else None
 
-    def ask(self, user_text, verbose=False):
-        """Run one full observe→think→act→repeat cycle, return the final answer."""
+    def ask(self, user_text, verbose=False, trace=None):
+        """Run one full observe→think→act→repeat cycle, return the final answer.
+
+        If `trace` is a list, structured step events are appended to it
+        (used by the web UI to show what the agent did): each is a dict like
+        {"kind": "rag"|"tool"|"result", ...}.
+        """
+        def emit(kind, **data):
+            if trace is not None:
+                trace.append({"kind": kind, **data})
+
         # 1. OBSERVE — augment the user's turn with retrieved knowledge.
         content = user_text
         if self.knowledge:
             ctx = self.knowledge.context_for(user_text)
             if ctx:
                 content = f"{ctx}\n\nQuestion: {user_text}"
+                n = ctx.count("---") + 1
                 if verbose:
-                    print(f"  ⟐ injected {ctx.count('---') + 1} knowledge chunk(s)")
+                    print(f"  ⟐ injected {n} knowledge chunk(s)")
+                emit("rag", chunks=n)
         self.messages.append({"role": "user", "content": content})
 
         # 2–4. THINK → ACT → REPEAT
@@ -62,6 +73,8 @@ class Agent:
                 result = tools.run(call["name"], call["arguments"])
                 if verbose:
                     print(f"    → {result}")
+                emit("tool", name=call["name"], arguments=call["arguments"],
+                     result=result)
                 self.messages.append({"role": "tool",
                                       "name": call["name"],
                                       "content": result})

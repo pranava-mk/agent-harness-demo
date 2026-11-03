@@ -37,8 +37,12 @@ missing — it asks first), clones the repo, builds a venv, pulls a small local
 model, and runs the self-test. Then:
 
 ```bash
-cd agent-harness-demo && . .venv/bin/activate && make chat
+cd agent-harness-demo && . .venv/bin/activate && make web
 ```
+
+This opens a **browser chat** that shows, live, what the agent does under the
+hood — which knowledge it retrieved (RAG) and which tools it called — before
+each answer. Prefer the terminal? `make chat` runs the same agent as a CLI.
 
 **No model / want to see it work offline right now?**
 
@@ -54,7 +58,7 @@ make selftest      # exercises every piece with a built-in fake backend
 | 📚 **RAG** | [`agent/rag.py`](agent/rag.py) | Embeds `knowledge/` into vectors; retrieves the chunks most relevant to a question. |
 | 🔧 **Tools** | [`agent/tools.py`](agent/tools.py) | Functions the LLM can *ask* to run (calculate, date, word-count). You run them, not the model. |
 | 🔁 **Loop** | [`agent/loop.py`](agent/loop.py) | The harness: wires the three together and runs observe→think→act→repeat. |
-| 💬 **Chat** | [`chat.py`](chat.py) | The human-facing REPL. Thin on purpose — swap it for a web UI, nothing else changes. |
+| 💬 **Chat** | [`web.py`](web.py) · [`chat.py`](chat.py) | The human-facing UI — a browser chat (shows the agent's RAG + tool steps live) or a terminal REPL. Thin on purpose; all intelligence lives in `agent/`. |
 
 ## 🔁 How the agent loop works
 
@@ -86,6 +90,9 @@ you ▸ what time is it?            # → calls the current_datetime tool
 ```
 
 Run `make chatv` (verbose) to watch retrieval and tool calls happen live.
+In the **web UI** (`make web`) every answer already shows these steps inline —
+a 📚 RAG tag and a 🔧 TOOL tag appear above each reply, so you can see exactly
+what the agent did.
 
 ## 🛠️ Extend it
 
@@ -146,10 +153,11 @@ agent-harness-demo/
 ├── knowledge/
 │   └── agent-concepts.md   # the RAG corpus (also the cheat-sheet)
 ├── examples/demo.py # three scripted questions, end-to-end
-├── chat.py          # 💬 the chat REPL
+├── web.py          # 💬 the browser chat UI (shows RAG + tool steps live)
+├── chat.py          # 💬 the terminal chat REPL
 ├── selftest.py      # ✅ verifies every piece offline
-├── install.sh       # one-command setup
-└── Makefile         # make chat | selftest | demo
+├── install.sh       # one-command guided setup
+└── Makefile         # make web | chat | selftest | demo
 ```
 
 ## License

@@ -1,10 +1,13 @@
 # Agent Harness Demo — handy shortcuts.
-.PHONY: chat selftest demo install
+.PHONY: web chat chatv selftest demo install
 
-chat:            ## Chat with the agent (needs ollama + a pulled model)
+web:             ## Open the web chat UI (recommended — shows RAG + tools live)
+	@python3 web.py
+
+chat:            ## Chat in the terminal (needs ollama + a pulled model)
 	@python3 chat.py
 
-chatv:           ## Chat, verbose (shows retrieval + tool calls)
+chatv:           ## Terminal chat, verbose (shows retrieval + tool calls)
 	@python3 chat.py -v
 
 selftest:        ## Verify the whole harness offline (no model needed)
