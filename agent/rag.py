@@ -29,6 +29,16 @@ KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowle
 # PML_AGENT_CHUNK_WORDS.
 CHUNK_WORDS = int(os.environ.get("PML_AGENT_CHUNK_WORDS", "500"))
 
+# Minimum cosine similarity for a chunk to count as "relevant" and be injected.
+# This is what stops RAG from firing on questions the knowledge base can't help
+# with (e.g. arithmetic) — below this, we retrieve nothing and let the LLM/tools
+# handle it. Tuned for nomic-embed-text; small/weak embedders separate poorly, so
+# override with PML_AGENT_MIN_SCORE if your retrieval feels too eager or too shy.
+MIN_SCORE = float(os.environ.get("PML_AGENT_MIN_SCORE", "0.45"))
+
+# Max chunks to inject when relevant ones exist.
+TOP_K = int(os.environ.get("PML_AGENT_TOP_K", "3"))
+
 
 def _chunk(text, size=None, overlap=20):
     """Split text into overlapping windows so answers don't get cut mid-idea."""
@@ -68,17 +78,21 @@ class Knowledge:
                 })
         return self
 
-    def search(self, question, k=3):
-        """Return the top-k most relevant chunks for a question."""
+    def search(self, question, k=None, min_score=None):
+        """Return relevant chunks for a question — only those scoring above the
+        relevance threshold, so unrelated questions retrieve nothing."""
         if not self.index:
             return []
+        k = k or TOP_K
+        thresh = MIN_SCORE if min_score is None else min_score
         qv = embed(question)
         scored = [(_cosine(qv, c["vector"]), c) for c in self.index]
         scored.sort(key=lambda s: s[0], reverse=True)
-        return [c for _, c in scored[:k]]
+        return [c for score, c in scored[:k] if score >= thresh]
 
-    def context_for(self, question, k=3):
-        """Format the top hits as a context block to inject into the prompt."""
+    def context_for(self, question, k=None):
+        """Format the relevant hits as a context block to inject into the prompt.
+        Returns '' when nothing clears the relevance threshold."""
         hits = self.search(question, k)
         if not hits:
             return ""
