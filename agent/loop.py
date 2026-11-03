@@ -65,7 +65,18 @@ class Agent:
 
             calls = reply.get("tool_calls")
             if not calls:
-                return reply["content"]  # plain answer → done
+                answer = (reply.get("content") or "").strip()
+                if answer:
+                    return answer
+                # Degenerate turn: no tool call AND empty content. Some small
+                # models do this when tool schemas are attached — they produce
+                # neither. Retry once WITHOUT tools to force a plain answer so
+                # the user never sees a blank reply.
+                if verbose:
+                    print("  ↻ empty reply with tools — retrying without tools")
+                retry = chat(self.messages)
+                answer = (retry.get("content") or "").strip()
+                return answer or "(the model returned an empty response — try rephrasing, or use a larger model)"
 
             for call in calls:
                 if verbose:
