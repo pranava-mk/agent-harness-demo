@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 
-DEFAULT_MODEL = os.environ.get("PML_AGENT_MODEL", "llama3.2")
+DEFAULT_MODEL = os.environ.get("PML_AGENT_MODEL", "llama3.1:8b")
 DEFAULT_EMBED_MODEL = os.environ.get("PML_AGENT_EMBED_MODEL", "nomic-embed-text")
 BACKEND = os.environ.get("PML_AGENT_BACKEND", "ollama")
 

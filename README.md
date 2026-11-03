@@ -91,13 +91,21 @@ Run `make chatv` (verbose) to watch retrieval and tool calls happen live.
 
 - **Add a tool:** write a function in `agent/tools.py`, decorate with `@tool(...)`. Done — the LLM can now use it.
 - **Add knowledge:** drop any `.md`/`.txt` file into `knowledge/`. It's indexed on next run.
-- **Swap the model:** `PML_AGENT_MODEL=llama3.1 make chat`
+- **Swap the model:** `PML_AGENT_MODEL=llama3.1:70b make chat`
 - **Swap the backend:** `PML_AGENT_BACKEND=stub` (offline fake) — used by the self-test.
 
-### Low-spec machine? Run tiny models
+### Models
 
-On a modest laptop (CPU-only, limited RAM) use small models — verified working on
-an 8-core i5 / 16 GB / no discrete GPU:
+Out of the box the installer pulls a capable local setup (great on a 16 GB Mac
+with Metal, or any machine with ~6 GB free for inference):
+
+| Role | Default model | Size |
+|---|---|---|
+| Chat / reasoning / tools | `llama3.1:8b` | ~4.7 GB |
+| Embeddings (RAG) | `nomic-embed-text` | ~275 MB |
+
+**On a weak / CPU-only box?** Drop to tiny models (verified on an 8-core i5 /
+16 GB / no GPU) and shrink the RAG chunk to fit a small embedder:
 
 ```bash
 ollama pull qwen2.5:0.5b      # ~400 MB chat model

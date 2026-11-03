@@ -11,7 +11,7 @@ set -euo pipefail
 
 REPO="https://github.com/pranava-mk/agent-harness-demo.git"
 DIR="agent-harness-demo"
-MODEL="llama3.2"
+MODEL="llama3.1:8b"
 EMBED_MODEL="nomic-embed-text"
 BOLD="$(printf '\033[1m')"; DIM="$(printf '\033[2m')"; GRN="$(printf '\033[32m')"; YEL="$(printf '\033[33m')"; RST="$(printf '\033[0m')"
 

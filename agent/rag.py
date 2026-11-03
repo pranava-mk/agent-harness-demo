@@ -24,10 +24,10 @@ from .llm import embed
 
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge")
 
-# Chunk size in words. Kept small so it fits even tiny embedding models like
-# all-minilm (~256-token limit). Override with PML_AGENT_CHUNK_WORDS if you use
-# a larger embedder (e.g. nomic-embed-text handles 2048+).
-CHUNK_WORDS = int(os.environ.get("PML_AGENT_CHUNK_WORDS", "120"))
+# Chunk size in words. Default suits nomic-embed-text (handles ~2048 tokens).
+# On a tiny embedder like all-minilm (~256-token limit) drop this to ~120 via
+# PML_AGENT_CHUNK_WORDS.
+CHUNK_WORDS = int(os.environ.get("PML_AGENT_CHUNK_WORDS", "500"))
 
 
 def _chunk(text, size=None, overlap=20):
