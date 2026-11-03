@@ -21,18 +21,38 @@ import json
 import os
 
 DEFAULT_MODEL = os.environ.get("PML_AGENT_MODEL", "llama3.2")
+DEFAULT_EMBED_MODEL = os.environ.get("PML_AGENT_EMBED_MODEL", "nomic-embed-text")
 BACKEND = os.environ.get("PML_AGENT_BACKEND", "ollama")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Ollama backend — the real thing
 # ──────────────────────────────────────────────────────────────────────────────
+def _to_ollama_messages(messages):
+    """Convert our flat message shape back to what the Ollama client expects.
+
+    We store tool calls as {name, arguments}; Ollama wants
+    {function: {name, arguments}}. Fix those up on the way out so replayed
+    history re-validates cleanly on multi-step (tool-calling) turns.
+    """
+    out = []
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            m = dict(m)
+            m["tool_calls"] = [
+                {"function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                for tc in m["tool_calls"]
+            ]
+        out.append(m)
+    return out
+
+
 def _ollama_chat(messages, tools=None, model=None):
     import ollama  # imported lazily so the stub path needs no dependency
 
     resp = ollama.chat(
         model=model or DEFAULT_MODEL,
-        messages=messages,
+        messages=_to_ollama_messages(messages),
         tools=tools or None,
     )
     msg = resp["message"]
@@ -52,7 +72,7 @@ def _ollama_chat(messages, tools=None, model=None):
 def _ollama_embed(text, model=None):
     import ollama
 
-    r = ollama.embeddings(model=model or "nomic-embed-text", prompt=text)
+    r = ollama.embeddings(model=model or DEFAULT_EMBED_MODEL, prompt=text)
     return r["embedding"]
 
 

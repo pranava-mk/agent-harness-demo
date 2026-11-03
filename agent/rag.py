@@ -24,9 +24,15 @@ from .llm import embed
 
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge")
 
+# Chunk size in words. Kept small so it fits even tiny embedding models like
+# all-minilm (~256-token limit). Override with PML_AGENT_CHUNK_WORDS if you use
+# a larger embedder (e.g. nomic-embed-text handles 2048+).
+CHUNK_WORDS = int(os.environ.get("PML_AGENT_CHUNK_WORDS", "120"))
 
-def _chunk(text, size=600, overlap=100):
+
+def _chunk(text, size=None, overlap=20):
     """Split text into overlapping windows so answers don't get cut mid-idea."""
+    size = size or CHUNK_WORDS
     words = text.split()
     chunks, i = [], 0
     while i < len(words):

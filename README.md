@@ -94,6 +94,24 @@ Run `make chatv` (verbose) to watch retrieval and tool calls happen live.
 - **Swap the model:** `PML_AGENT_MODEL=llama3.1 make chat`
 - **Swap the backend:** `PML_AGENT_BACKEND=stub` (offline fake) — used by the self-test.
 
+### Low-spec machine? Run tiny models
+
+On a modest laptop (CPU-only, limited RAM) use small models — verified working on
+an 8-core i5 / 16 GB / no discrete GPU:
+
+```bash
+ollama pull qwen2.5:0.5b      # ~400 MB chat model
+ollama pull all-minilm        # ~45 MB embedding model
+
+PML_AGENT_MODEL=qwen2.5:0.5b \
+PML_AGENT_EMBED_MODEL=all-minilm \
+PML_AGENT_CHUNK_WORDS=120 \
+make chat
+```
+
+`PML_AGENT_EMBED_MODEL` and `PML_AGENT_CHUNK_WORDS` let you match the RAG chunk
+size to a small embedder's context limit (all-minilm maxes ~256 tokens).
+
 ## 📖 Concepts cheat-sheet
 
 Short, plain-language definitions live in [`knowledge/agent-concepts.md`](knowledge/agent-concepts.md)
