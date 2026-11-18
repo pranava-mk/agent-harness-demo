@@ -32,25 +32,29 @@ leaves the machine.
 curl -fsSL https://raw.githubusercontent.com/pranava-mk/agent-harness-demo/main/install.sh | bash
 ```
 
-It checks for `git` / `python3` / `ollama` (offering to install anything
-missing — it asks first), clones the repo, builds a venv, pulls a small local
-model, and runs the self-test. Then:
+It checks for `git` / `uv` / `ollama` (offering to install anything missing —
+it asks first), clones the repo (or **self-updates** it with `git pull` if
+you've already got it — just re-run the same command any time), builds an
+isolated environment with [`uv`](https://github.com/astral-sh/uv), pulls a
+small local model, and runs the self-test. Every command it prints uses an
+**absolute path** — nothing relies on `cd`-ing into the project first. Then:
 
 ```bash
-cd agent-harness-demo && . .venv/bin/activate && make web
+make -C agent-harness-demo web
 ```
 
 This opens a **browser chat** that shows, live, what the agent does under the
 hood — which knowledge it retrieved (RAG) and which tools it called — before
-each answer. You can also **upload a PDF right in the browser**: it's parsed,
-chunked, embedded and indexed on the spot, with every pipeline step shown
-live, then you can ask questions about it (real RAG, not a demo fake). Prefer
-the terminal? `make chat` runs the same agent as a CLI.
+each answer. There's also a **📄 PDF upload button** right in the chat: drop
+in a document and it's parsed, chunked, embedded and indexed on the spot,
+with every pipeline step shown live — then you can ask questions about it
+(real RAG, not a demo fake). Prefer the terminal? `make -C agent-harness-demo chat`
+runs the same agent as a CLI.
 
 **No model / want to see it work offline right now?**
 
 ```bash
-make selftest      # exercises every piece with a built-in fake backend
+make -C agent-harness-demo selftest      # exercises every piece with a built-in fake backend
 ```
 
 ## 🧱 The four pieces
@@ -125,7 +129,7 @@ ollama pull all-minilm        # ~45 MB embedding model
 PML_AGENT_MODEL=qwen2.5:0.5b \
 PML_AGENT_EMBED_MODEL=all-minilm \
 PML_AGENT_CHUNK_WORDS=120 \
-make chat
+make -C agent-harness-demo chat
 ```
 
 `PML_AGENT_EMBED_MODEL` and `PML_AGENT_CHUNK_WORDS` let you match the RAG chunk
@@ -140,7 +144,7 @@ tool calling, harness, RAG, embeddings, **MCP**, and **skills**.
 
 ## Requirements
 
-- **Python 3.9+**
+- **[uv](https://github.com/astral-sh/uv)** to build the isolated Python environment (the installer sets it up)
 - **[Ollama](https://ollama.com)** for the real local LLM (the installer sets it up)
 - One Python dependency (`ollama` client). The agent loop, RAG, tools and chat
   are pure standard library — deliberately, so nothing hides the mechanism.

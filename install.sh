@@ -4,16 +4,23 @@
 # Run with nothing pre-cloned:
 #   curl -fsSL https://raw.githubusercontent.com/pranava-mk/agent-harness-demo/main/install.sh | bash
 #
-# Unlike a silent installer, this walks you through the FOUR pieces of an agent
+# Unlike a silent installer, this walks you through the pieces of an agent
 # harness as it builds them — explaining each, asking before each step, and
 # finishing with a diagram of how everything is wired together.
+#
+# Two things worth knowing up front:
+#   - It self-updates: if the repo is already cloned, it `git pull`s the
+#     latest `main` before doing anything else, so re-running this script is
+#     always safe and always gets you current.
+#   - It uses absolute paths throughout (no `cd` into the project) — every
+#     command below works no matter what directory you ran this from.
 set -euo pipefail
 
 REPO="https://github.com/pranava-mk/agent-harness-demo.git"
-DIR="agent-harness-demo"
+DIR_NAME="agent-harness-demo"
 MODEL="llama3.1:8b"
 EMBED_MODEL="nomic-embed-text"
-TOTAL=5
+TOTAL=6
 
 # ── palette ─────────────────────────────────────────────────────────────────
 B="$(printf '\033[1m')"; D="$(printf '\033[2m')"; R="$(printf '\033[0m')"
@@ -46,8 +53,6 @@ stage() {
   printf "%s\n" "  ${MAG}${B}STEP $1/${TOTAL}${R}  ${B}·  $2${R}"
   hr
 }
-
-typefx() { printf "%s\n" "$*"; }   # placeholder hook (kept simple/fast)
 
 OS="$(uname -s)"
 pkg_hint() {
@@ -92,15 +97,23 @@ proceed "Ready to begin?" || { echo; warn "No problem — run this again anytime
 # ════════════════════════════════════════════════════════════════════════════
 #  STEP 1 — Prerequisites
 # ════════════════════════════════════════════════════════════════════════════
-stage 1 "Prerequisites  (git + python)"
-info "Every build needs a couple of basics: ${B}git${R}${D} to fetch the code and"
-info "${B}python3${R}${D} to run it. Let's make sure they're present."
+stage 1 "Prerequisites  (git + uv)"
+info "Every build needs ${B}git${R}${D} to fetch the code and ${B}uv${R}${D} — a fast,"
+info "modern Python package/environment manager — to build an isolated"
+info "environment. No system Python packages get touched."
 echo
-if proceed "Check (and install if missing) git & python3?"; then
+if proceed "Check (and install if missing) git & uv?"; then
   need git || true
-  need python3 python3 || true
+  if command -v uv >/dev/null 2>&1; then
+    good "uv is already here"
+  elif proceed "Install uv now (official installer, no sudo needed)?"; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    warn "Skipped uv — the environment step below will fail without it."
+  fi
 else
-  warn "Skipped — assuming git & python3 are present."
+  warn "Skipped — assuming git & uv are present."
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -121,40 +134,82 @@ elif proceed "Set up Ollama now?"; then
     curl -fsSL https://ollama.com/install.sh | sh || warn "See https://ollama.com/download"
   fi
 else
-  warn "Skipped Ollama — you can still run 'make selftest' offline."
+  warn "Skipped Ollama — you can still run the self-test offline."
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-#  STEP 3 — The harness code (clone + environment)
+#  STEP 3 — Fetch the code (clone, or self-update if already cloned)
 # ════════════════════════════════════════════════════════════════════════════
-stage 3 "🔁 The harness  (code + environment)"
-info "Now the ${GRN}loop${R}${D} itself — the ~400 lines that wire everything together,"
-info "plus the ${YEL}tools${R}${D} it can call. We'll fetch the code and create an isolated"
-info "Python environment so nothing touches your system packages."
+stage 3 "📥 The code  (clone, or pull latest)"
+info "Resolving an ${B}absolute${R}${D} path to the repo — every command this script"
+info "and the Makefile run from here on uses that full path, never a bare"
+info "'cd' into the project, so it's safe to run from anywhere."
 echo
-if proceed "Fetch the code and build the environment?"; then
-  if [ -f "selftest.py" ] && [ -d "agent" ]; then
-    good "already inside the repo"
-  else
-    if [ -d "$DIR" ]; then good "repo already cloned → $DIR"
-    else say "Cloning…"; git clone --depth 1 "$REPO" "$DIR"; fi
-    cd "$DIR"
-  fi
-  say "Creating virtual environment + installing dependencies…"
-  python3 -m venv .venv
-  # shellcheck disable=SC1091
-  . .venv/bin/activate
-  pip install -q --upgrade pip
-  pip install -q -r requirements.txt
-  good "environment ready"
+
+# If we're already sitting inside a checked-out copy of this repo, use it.
+# Otherwise clone fresh under the current directory.
+REPO_ROOT=""
+if [ -f "selftest.py" ] && [ -d "agent" ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  good "already inside the repo → $REPO_ROOT"
 else
-  warn "Skipped — the demo can't run without the code."
+  REPO_ROOT="$(pwd)/$DIR_NAME"
+  if [ -d "$REPO_ROOT/.git" ]; then
+    good "repo already cloned → $REPO_ROOT"
+  else
+    say "Cloning into $REPO_ROOT…"
+    git clone "$REPO" "$REPO_ROOT"
+  fi
+fi
+
+# Self-update: always check for and pull the latest main before continuing,
+# so re-running this script is the one command you need after any update.
+if [ -d "$REPO_ROOT/.git" ]; then
+  say "Checking $REPO_ROOT for updates…"
+  BEFORE_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+  if git -C "$REPO_ROOT" fetch --quiet origin 2>/dev/null; then
+    if git -C "$REPO_ROOT" pull --quiet --ff-only 2>/dev/null; then
+      AFTER_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+      if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
+        good "updated $(git -C "$REPO_ROOT" rev-parse --short "$BEFORE_SHA" 2>/dev/null || echo '?') → $(git -C "$REPO_ROOT" rev-parse --short "$AFTER_SHA")"
+      else
+        good "already up to date ($(git -C "$REPO_ROOT" rev-parse --short HEAD))"
+      fi
+    else
+      warn "couldn't fast-forward (local changes in $REPO_ROOT?) — continuing with the local copy as-is"
+    fi
+  else
+    warn "couldn't reach GitHub to check for updates — continuing with the local copy"
+  fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-#  STEP 4 — The models (brain + memory)
+#  STEP 4 — The environment (uv-managed venv, absolute paths)
 # ════════════════════════════════════════════════════════════════════════════
-stage 4 "📚 The models  (reasoning + embeddings)"
+stage 4 "🔁 The environment  (uv venv + deps)"
+info "Now the ${GRN}loop${R}${D} itself — the ~400 lines that wire everything together,"
+info "plus the ${YEL}tools${R}${D} it can call. uv builds an isolated environment at"
+info "${B}$REPO_ROOT/.venv${R}${D} — nothing touches your system Python."
+echo
+PY="$REPO_ROOT/.venv/bin/python3"
+if proceed "Build the environment with uv?"; then
+  if ! command -v uv >/dev/null 2>&1; then
+    warn "uv isn't on PATH — can't build the environment. Install uv and re-run."
+  else
+    say "Creating venv at $REPO_ROOT/.venv…"
+    uv venv "$REPO_ROOT/.venv" --quiet
+    say "Installing dependencies…"
+    uv pip install --quiet --python "$PY" -r "$REPO_ROOT/requirements.txt"
+    good "environment ready → $PY"
+  fi
+else
+  warn "Skipped — the demo can't run without the environment."
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+#  STEP 5 — The models (brain + memory)
+# ════════════════════════════════════════════════════════════════════════════
+stage 5 "📚 The models  (reasoning + embeddings)"
 info "Two models power two pieces:"
 info "  • ${B}${MODEL}${R}${D} — the ${CYN}brain${R}${D} (chat, reasoning, tool-calling)"
 info "  • ${B}${EMBED_MODEL}${R}${D} — the ${BLU}embedder${R}${D} that turns your docs into"
@@ -174,17 +229,22 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-#  STEP 5 — Verify the wiring
+#  STEP 6 — Verify the wiring
 # ════════════════════════════════════════════════════════════════════════════
-stage 5 "✅ Verify  (does it all connect?)"
+stage 6 "✅ Verify  (does it all connect?)"
 info "Before we celebrate, let's prove every piece is wired correctly. The"
 info "self-test runs the whole harness on a built-in ${B}offline fake${R}${D} backend —"
-info "so it passes with or without a model, checking tools, RAG and the loop."
+info "so it passes with or without a model, checking tools, RAG, PDF parsing"
+info "and the loop."
 echo
 if proceed "Run the self-test now?"; then
-  PML_AGENT_BACKEND=stub python3 selftest.py || warn "self-test reported an issue (see above)"
+  if [ -x "$PY" ]; then
+    PML_AGENT_BACKEND=stub "$PY" "$REPO_ROOT/selftest.py" || warn "self-test reported an issue (see above)"
+  else
+    warn "no environment built yet (step 4 was skipped) — can't run the self-test."
+  fi
 else
-  warn "Skipped — you can run it anytime with 'make selftest'."
+  warn "Skipped — you can run it anytime (see the command below)."
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -195,9 +255,9 @@ hr
 printf "%s\n" "  ${GRN}${B}✅  YOUR AGENT IS ASSEMBLED${R}"
 hr
 echo
-printf "%s\n" "  ${D}Here's how the four pieces are now plugged together:${R}"
+printf "%s\n" "  ${D}Here's how the pieces are now plugged together:${R}"
 echo
-printf '%s\n' "        ${B}you${R} ${D}│${R} \"what is a harness?\"  ·  \"what is 19*23?\""
+printf '%s\n' "        ${B}you${R} ${D}│${R} \"what is a harness?\"  ·  \"what is 19*23?\"  ·  📄 upload a PDF"
 printf '%s\n' "         ${D}▼${R}"
 printf '%s\n' "   ${GRN}┌───────────────────────────────────────────────────┐${R}"
 printf '%s\n' "   ${GRN}│${R}  ${GRN}${B}🔁 THE LOOP${R}  ${D}(the harness — runs the cycle)${R}      ${GRN}│${R}"
@@ -217,12 +277,19 @@ printf '%s\n' "   ${GRN}🔁 Loop${R} ${D}repeats until the LLM replies in plain
 echo
 info "That's the whole trick: the LLM only ever knows what the loop puts in"
 info "front of it. Everything else is context engineering + this dispatch loop."
+info "The web UI also has a 📄 PDF upload button — drop in a document and ask"
+info "questions about it; it's chunked, embedded and indexed live, on the spot."
 echo
 hr
-say "Start talking to your agent:"
-printf "%s\n" "   ${B}cd ${DIR}  &&  . .venv/bin/activate  &&  make web${R}"
-info "opens a browser chat that shows RAG + tool calls live as it answers"
+say "Start talking to your agent (absolute paths — works from anywhere):"
+printf "%s\n" "   ${B}$PY $REPO_ROOT/web.py${R}"
+info "opens a browser chat that shows RAG + tool calls live, with a PDF upload button"
 echo
-info "Prefer the terminal?    make chat            (same agent, CLI)"
-info "Offline / no model?     make selftest        (verifies the wiring)"
+info "Prefer the terminal?    $PY $REPO_ROOT/chat.py"
+info "Offline / no model?     PML_AGENT_BACKEND=stub $PY $REPO_ROOT/selftest.py"
+info "Or with make (same absolute-path approach, from any directory):"
+info "    make -C $REPO_ROOT web"
+echo
+info "Re-running this script any time self-updates the repo and environment:"
+printf "%s\n" "   ${B}curl -fsSL https://raw.githubusercontent.com/pranava-mk/agent-harness-demo/main/install.sh | bash${R}"
 echo
