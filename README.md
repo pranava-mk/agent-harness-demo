@@ -33,11 +33,12 @@ curl -fsSL https://raw.githubusercontent.com/pranava-mk/agent-harness-demo/main/
 ```
 
 It checks for `git` / `uv` / `ollama` (offering to install anything missing —
-it asks first), clones the repo (or **self-updates** it with `git pull` if
-you've already got it — just re-run the same command any time), builds an
-isolated environment with [`uv`](https://github.com/astral-sh/uv), pulls a
-small local model, and runs the self-test. Every command it prints uses an
-**absolute path** — nothing relies on `cd`-ing into the project first. Then:
+it asks first), installs to a **fixed, predictable directory**
+(`~/agent-harness-demo` by default, override with `AGENT_HARNESS_DIR=/some/path`
+— the same convention nvm/pyenv/rustup use) and **self-updates** it with
+`git pull` if it's already there — just re-run the same command any time.
+It builds an isolated environment with [`uv`](https://github.com/astral-sh/uv),
+pulls a small local model, and runs the self-test. Then:
 
 ```bash
 make -C agent-harness-demo web
