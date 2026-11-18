@@ -55,6 +55,41 @@ check("remove_document cleans up", removed == len(added) and not any(c["source"]
 # encoding + ToUnicode CMaps, which is the common case and easy to get wrong).
 check("pdf_extract returns '' on garbage input", pdf_extract.extract_text(b"not a pdf") == "")
 
+# 2d. PDF extraction: per-font CMap resolution. Two different embedded
+# fonts can legitimately reuse the same CID for different characters -- a
+# naive "merge every CMap into one table" approach would silently pick
+# whichever font's mapping was parsed last (WRONG for one of the two). This
+# builds a minimal hand-rolled two-font PDF where /F1's CID 0x0001 means 'A'
+# and /F2's CID 0x0001 means 'Z', and checks real per-font disambiguation
+# happens (not just "didn't crash").
+def _make_multifont_pdf():
+    objects = {}
+    objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    objects[2] = b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>"
+    objects[3] = (b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                  b"/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>")
+    content = b"BT /F1 12 Tf <0001> Tj ET\nBT /F2 12 Tf <0001> Tj ET"
+    objects[4] = b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream"
+    objects[5] = b"<< /Type /Font /Subtype /Type0 /ToUnicode 7 0 R >>"
+    objects[6] = b"<< /Type /Font /Subtype /Type0 /ToUnicode 8 0 R >>"
+    cmap1 = b"/CIDInit /ProcSet findresource begin\n1 beginbfchar\n<0001> <0041>\nendbfchar\n"
+    cmap2 = b"/CIDInit /ProcSet findresource begin\n1 beginbfchar\n<0001> <005A>\nendbfchar\n"
+    objects[7] = b"<< /Length %d >>\nstream\n" % len(cmap1) + cmap1 + b"\nendstream"
+    objects[8] = b"<< /Length %d >>\nstream\n" % len(cmap2) + cmap2 + b"\nendstream"
+    parts = [b"%PDF-1.4\n"]
+    for num, body in sorted(objects.items()):
+        parts.append(b"%d 0 obj\n" % num + body + b"\nendobj\n")
+    parts.append(b"%%EOF\n")
+    return b"".join(parts)
+
+multifont_pdf = _make_multifont_pdf()
+merged_only = pdf_extract._build_cid_to_unicode_map(multifont_pdf)
+multifont_text = pdf_extract.extract_text(multifont_pdf)
+check("merged-only cmap collides on CID 1 (demonstrates the bug per-font fixes)",
+      len(merged_only) == 1 and merged_only[1] in ("A", "Z"))
+check("per-font resolution disambiguates colliding CIDs correctly",
+      "A" in multifont_text and "Z" in multifont_text)
+
 # 3. The loop: plain reply, and a tool-call round-trip.
 a = Agent()
 ans = a.ask("hello there")
@@ -63,6 +98,22 @@ check("loop returns a plain answer", isinstance(ans, str) and len(ans) > 0)
 a2 = Agent(use_rag=False)
 ans2 = a2.ask("please calculate something")
 check("loop drives a tool call + summarises", "tool result" in ans2.lower())
+
+# 3b. The loop: bounded conversation history. A long-running session (e.g.
+# the web UI, whose Agent instance lives for the whole server process)
+# must not accumulate every message ever sent -- that's unbounded memory
+# growth AND a correctness trap (stale RAG/tool context lingering forever).
+from agent.loop import MAX_HISTORY_TURNS
+a3 = Agent(use_rag=False)
+for i in range(MAX_HISTORY_TURNS + 10):
+    a3.ask(f"ping number {i}, just calculate 1+1")
+user_turns = sum(1 for m in a3.messages if m["role"] == "user")
+check(f"conversation history is capped at {MAX_HISTORY_TURNS} turns",
+      user_turns == MAX_HISTORY_TURNS)
+check("history still starts with the system prompt after trimming",
+      a3.messages[0]["role"] == "system")
+check("oldest turn's tool call/result wasn't left dangling after trimming",
+      not (a3.messages[1]["role"] == "tool"))
 
 print()
 if ok:

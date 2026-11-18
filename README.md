@@ -65,8 +65,8 @@ make -C agent-harness-demo selftest      # exercises every piece with a built-in
 | 🧠 **LLM** | [`agent/llm.py`](agent/llm.py) | The brain. Takes messages → returns the next message. Knows nothing else. |
 | 📚 **RAG** | [`agent/rag.py`](agent/rag.py) | Embeds `knowledge/` into vectors; retrieves the chunks most relevant to a question. |
 | 🔧 **Tools** | [`agent/tools.py`](agent/tools.py) | Functions the LLM can *ask* to run (calculate, date, word-count). You run them, not the model. |
-| 🔁 **Loop** | [`agent/loop.py`](agent/loop.py) | The harness: wires the three together and runs observe→think→act→repeat. |
-| 📄 **PDF parsing** | [`agent/pdf_extract.py`](agent/pdf_extract.py) | Stdlib-only PDF text extraction (no PyPDF2/pdfplumber) — handles the common case including browser/LibreOffice-generated CID-font PDFs. Feeds `add_document` for live uploads. |
+| 🔁 **Loop** | [`agent/loop.py`](agent/loop.py) | The harness: wires the three together and runs observe→think→act→repeat, with a bounded conversation window (`PML_AGENT_MAX_HISTORY_TURNS`, default 6). |
+| 📄 **PDF parsing** | [`agent/pdf_extract.py`](agent/pdf_extract.py) | Stdlib-only PDF text extraction (no PyPDF2/pdfplumber) — handles the common case including browser/LibreOffice-generated CID-font PDFs, with per-font CMap resolution so two embedded fonts reusing the same glyph ID for different characters don't collide. Feeds `add_document` for live uploads. |
 | 💬 **Chat** | [`web.py`](web.py) · [`chat.py`](chat.py) | The human-facing UI — a browser chat (shows RAG + tool steps live, plus live PDF upload) or a terminal REPL. Thin on purpose; all intelligence lives in `agent/`. |
 
 ## 🔁 How the agent loop works

@@ -27,6 +27,12 @@ from agent.pdf_extract import extract_text as extract_pdf_text
 
 PORT = int(os.environ.get("PORT", "8000"))
 
+# Reject absurd/malformed uploads before wasting any parsing effort on them.
+# 20 MB covers virtually any real text-based PDF (our heaviest real-world
+# test fixture, an 8-page Wikipedia export with embedded images, was ~4.7 MB)
+# -- override with PML_AGENT_MAX_UPLOAD_BYTES for a different ceiling.
+MAX_UPLOAD_BYTES = int(os.environ.get("PML_AGENT_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+
 
 def _port_is_free(port, host="127.0.0.1"):
     """True if a server can actually bind to (host, port) right now."""
@@ -237,6 +243,12 @@ function renderTrace(trace){
 pdfInput.addEventListener('change', async () => {
   const file = pdfInput.files[0];
   if(!file) return;
+  const MAX_UPLOAD_MB = 20;  // mirrors MAX_UPLOAD_BYTES server-side default
+  if(file.size > MAX_UPLOAD_MB*1024*1024){
+    bubble('bot', `⚠️ ${file.name} is ${(file.size/1024/1024).toFixed(1)} MB — over the ${MAX_UPLOAD_MB} MB limit. Try a smaller file.`);
+    pdfInput.value = '';
+    return;
+  }
   uploadLabel.textContent = 'Parsing…';
   pdfInput.disabled = true;
   bubble('you', `📄 uploaded ${file.name}`);
@@ -345,12 +357,39 @@ class Handler(BaseHTTPRequestHandler):
         (this is the point of the demo: make RAG's internals visible)."""
         try:
             payload = self._read_json()
-            filename = (payload.get("filename") or "upload.pdf").strip()
+            filename = os.path.basename((payload.get("filename") or "upload.pdf").strip()) or "upload.pdf"
             data_b64 = payload.get("data_b64") or ""
             if not data_b64:
                 return self._send(400, json.dumps({"error": "no file data received"}))
 
-            pdf_bytes = base64.b64decode(data_b64)
+            # Reject an oversized payload before even base64-decoding it
+            # (base64 inflates size ~33%, so this is a conservative bound).
+            if len(data_b64) > MAX_UPLOAD_BYTES * 4 // 3 + 1024:
+                return self._send(400, json.dumps({
+                    "error": f"file is too large — over the {MAX_UPLOAD_BYTES // (1024*1024)} MB limit "
+                             "(rejected before decoding)",
+                }))
+
+            try:
+                pdf_bytes = base64.b64decode(data_b64)
+            except Exception:
+                return self._send(400, json.dumps({"error": "upload wasn't valid file data"}))
+
+            if len(pdf_bytes) > MAX_UPLOAD_BYTES:
+                return self._send(400, json.dumps({
+                    "error": f"file is {len(pdf_bytes) // (1024*1024)} MB, over the "
+                             f"{MAX_UPLOAD_BYTES // (1024*1024)} MB limit",
+                }))
+
+            # Cheap magic-byte check: per the PDF spec, the file can have a
+            # few bytes of junk before the header, but %PDF- always appears
+            # near the top. This catches a renamed non-PDF (or a corrupt/
+            # truncated file) before we waste any parsing effort on it.
+            if b"%PDF-" not in pdf_bytes[:1024]:
+                return self._send(400, json.dumps({
+                    "error": "this doesn't look like a PDF (no %PDF- header found)",
+                }))
+
             trace = []
 
             text = extract_pdf_text(pdf_bytes)
