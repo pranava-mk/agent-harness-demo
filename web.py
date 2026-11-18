@@ -16,6 +16,7 @@ Run:  python web.py            → http://localhost:8000
 """
 import json
 import os
+import socket
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from agent import Agent
 
 PORT = int(os.environ.get("PORT", "8000"))
+
+
+def _port_is_free(port, host="127.0.0.1"):
+    """True if a server can actually bind to (host, port) right now."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _pick_port(preferred, host="127.0.0.1", tries=50):
+    """Use PORT if free; otherwise scan upward for the next open one.
+    If PORT came from the user explicitly (env var), tell them it was busy."""
+    if _port_is_free(preferred, host):
+        return preferred, False
+    for candidate in range(preferred + 1, preferred + 1 + tries):
+        if _port_is_free(candidate, host):
+            return candidate, True
+    # last resort: let the OS assign any free ephemeral port
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind((host, 0))
+    candidate = s.getsockname()[1]
+    s.close()
+    return candidate, True
 
 # One agent instance, guarded by a lock (the LLM call isn't reentrant).
 _agent = Agent()
@@ -220,8 +250,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    url = f"http://localhost:{PORT}"
+    port, fell_back = _pick_port(PORT)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://localhost:{port}"
+    if fell_back:
+        print(f"\n  ⚠️  Port {PORT} was busy — using {port} instead.")
     print(f"\n  🌐  Agent Harness web chat → {url}")
     print("  (Ctrl-C to stop)\n")
     try:
