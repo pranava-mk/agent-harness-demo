@@ -21,6 +21,15 @@ What it does, step by step (mirrors what we show in the UI trace):
      PDFs, single-byte fonts) and hex strings `<0024004A...>` (CID fonts) —
      decoding hex strings via the CMap from step 2.
 
+Performance note: a PDF's biggest streams are almost always embedded images
+or font programs, not actual page text — and raw binary data can easily
+contain the literal bytes "Tj"/"BT" by pure chance. Running a backtracking
+regex meant for text operators over megabytes of that noise is what makes a
+naive version of this slow (measured: 30+ seconds on an 8-page, 3.5MB PDF
+with embedded images). So we skip any stream over MAX_STREAM_BYTES outright
+(real per-page content streams are essentially never that large) and require
+BT/Tj/TJ to appear as whitespace-delimited tokens, not bare substrings.
+
 Limitations (explicitly, not hidden): this merges all CMaps found in the
 document into one table rather than resolving per-font indirect references
 through the full object graph — correct for the common case (one or a
@@ -31,6 +40,18 @@ still extract nothing, by design — that's a different problem (OCR).
 from __future__ import annotations
 import re
 import zlib
+
+# Real per-page content streams are rarely this big even for text-dense
+# pages; anything larger is almost certainly an embedded image or font
+# program, and parsing those for text operators is both pointless and (on
+# multi-MB binary data) can take tens of seconds due to regex backtracking.
+MAX_STREAM_BYTES = 400_000
+
+# Require BT/Tj/TJ as whitespace-delimited tokens rather than bare substring
+# checks — raw binary (images, fonts) can contain these two/three-byte
+# sequences by pure chance, which is what makes a naive substring check a
+# performance trap on image-heavy PDFs.
+_LOOKS_LIKE_CONTENT_STREAM = re.compile(rb"(?:^|[\s>\]])(?:BT|Tj|TJ)(?:[\s\\(<]|$)")
 
 
 def extract_text(pdf_bytes: bytes) -> str:
@@ -48,11 +69,15 @@ def extract_text(pdf_bytes: bytes) -> str:
     # the RESULT for text operators sidesteps that whole class of bug.
     for m in re.finditer(rb"[^a-zA-Z]stream\r?\n(.*?)endstream", pdf_bytes, re.DOTALL):
         raw = m.group(1)
+        if len(raw) > MAX_STREAM_BYTES * 4:  # cheap pre-check before decompressing at all
+            continue
         try:
             stream = zlib.decompress(raw)
         except zlib.error:
             stream = raw  # not Flate-compressed — use as-is
-        if b"Tj" not in stream and b"TJ" not in stream and b"BT" not in stream:
+        if len(stream) > MAX_STREAM_BYTES:
+            continue  # almost certainly an image/font blob, not page text
+        if not _LOOKS_LIKE_CONTENT_STREAM.search(stream):
             continue
         text_parts.append(_text_from_content_stream(stream, cmap))
 
