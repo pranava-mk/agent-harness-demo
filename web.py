@@ -14,6 +14,7 @@ intelligence still lives in agent/; this file only moves bytes.
 Run:  python web.py            → http://localhost:8000
       PORT=9000 python web.py
 """
+import base64
 import json
 import os
 import socket
@@ -22,6 +23,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from agent import Agent
+from agent.pdf_extract import extract_text as extract_pdf_text
 
 PORT = int(os.environ.get("PORT", "8000"))
 
@@ -102,6 +104,9 @@ PAGE = r"""<!doctype html>
   .step .tag{padding:2px 8px;border-radius:999px;font-weight:600;font-size:11px}
   .step.rag  .tag{background:rgba(74,163,255,.15);color:var(--rag);border:1px solid rgba(74,163,255,.4)}
   .step.tool .tag{background:rgba(255,184,74,.15);color:var(--tool);border:1px solid rgba(255,184,74,.4)}
+  .step.score .tag{background:rgba(74,163,255,.08);color:var(--rag);border:1px solid rgba(74,163,255,.25)}
+  .step.score.fail{opacity:.55}
+  .step.doc   .tag{background:rgba(124,108,255,.15);color:var(--accent);border:1px solid rgba(124,108,255,.4)}
   @keyframes rise{to{opacity:1;transform:translateY(0)}}
   .typing{display:inline-flex;gap:4px;padding:14px 18px}
   .typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
@@ -120,6 +125,16 @@ PAGE = r"""<!doctype html>
   .chip{display:inline-block;margin:0 6px 6px 0;padding:5px 11px;border:1px solid var(--line);
     border-radius:999px;font-size:12.5px;color:var(--muted);cursor:pointer;background:var(--surface)}
   .chip:hover{border-color:var(--accent);color:var(--text)}
+  .upload{display:flex;align-items:center;gap:8px;margin-left:10px}
+  .upload label{display:flex;align-items:center;gap:6px;padding:7px 13px;border-radius:999px;
+    border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:12.5px;
+    cursor:pointer;white-space:nowrap}
+  .upload label:hover{border-color:var(--accent);color:var(--text)}
+  .upload input[type=file]{display:none}
+  .docpill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    background:rgba(124,108,255,.1);border:1px solid rgba(124,108,255,.35);color:var(--accent);
+    font-size:11.5px;font-family:ui-monospace,monospace}
+  .docpill .x{cursor:pointer;opacity:.7}.docpill .x:hover{opacity:1}
 </style>
 </head>
 <body>
@@ -127,11 +142,17 @@ PAGE = r"""<!doctype html>
   <span class="dot"></span>
   <h1>Agent Harness — live chat</h1>
   <span class="pieces"><b>🧠 LLM</b> + <b>📚 RAG</b> + <b>🔧 Tools</b> + <b>🔁 Loop</b></span>
+  <div class="upload">
+    <label for="pdf"><span>📄</span><span id="uploadLabel">Upload a PDF</span></label>
+    <input id="pdf" type="file" accept="application/pdf">
+  </div>
 </header>
+
+<div id="docbar" class="wrap" style="padding-top:12px;display:none"></div>
 
 <div id="log"><div class="wrap" id="logwrap">
   <div class="msg bot"><span class="who">agent</span>
-    <div class="bubble">Hi — I'm a tiny but complete agent: a local LLM, a knowledge base (RAG), and some tools, wired in a loop. Ask me something and watch what I do under the hood.</div>
+    <div class="bubble">Hi — I'm a tiny but complete agent: a local LLM, a knowledge base (RAG), and some tools, wired in a loop. Ask me something and watch what I do under the hood. Upload a PDF above and I'll chunk it, embed it, and let you ask questions about it — RAG, live.</div>
   </div>
   <div class="wrap">
     <div class="hint">Try:
@@ -168,6 +189,75 @@ function bubble(who, text){
 
 function ask(text){ q.value = text; send(); }
 
+// ── PDF upload: parse → chunk → embed, with every step shown live ──────────
+const pdfInput = document.getElementById('pdf');
+const uploadLabel = document.getElementById('uploadLabel');
+const docbar = document.getElementById('docbar');
+const docs = {}; // source name -> pill element
+
+function renderDocPill(name, nChunks){
+  if(docs[name]) docs[name].remove();
+  const pill = el('docpill', `<span>📄 ${esc(name)} — ${nChunks} chunk(s) indexed</span><span class="x" data-name="${esc(name)}">✕</span>`);
+  pill.querySelector('.x').onclick = () => removeDoc(name);
+  docbar.appendChild(pill);
+  docs[name] = pill;
+  docbar.style.display = 'block';
+}
+
+async function removeDoc(name){
+  await fetch('/api/document', {method:'DELETE', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({source: name})});
+  if(docs[name]){ docs[name].remove(); delete docs[name]; }
+  if(!Object.keys(docs).length) docbar.style.display = 'none';
+}
+
+function renderTrace(trace){
+  if(!trace || !trace.length) return;
+  const t = el('trace');
+  trace.forEach((s,i)=>{
+    let line, cls = s.kind;
+    if(s.kind==='doc_parsed') line = `<span class="tag">📄 PARSE</span> extracted <b>${s.n_words}</b> word(s) from <b>${esc(s.source)}</b>`;
+    else if(s.kind==='doc_chunk') line = `<span class="tag">✂️ CHUNK</span> split <b>${esc(s.source)}</b> (${s.n_words} words) into <b>${s.n_chunks}</b> chunk(s)`;
+    else if(s.kind==='doc_embed') line = `<span class="tag">🧮 EMBED</span> chunk ${s.chunk_index+1}/${s.n_chunks} → vector — "<i>${esc(s.preview)}…</i>"`;
+    else if(s.kind==='query_embed') line = `<span class="tag">🧮 EMBED</span> query → ${s.dims}-dim vector: "<i>${esc(s.question)}</i>"`;
+    else if(s.kind==='score'){
+      cls += s.passed ? ' pass' : ' fail';
+      line = `<span class="tag">📐 COMPARE</span> cosine(query, <b>${esc(s.source)}</b> "${esc(s.preview)}…") = <b>${s.score}</b> ${s.passed?`≥ ${s.threshold} ✓ used`:`< ${s.threshold} ✗ skipped`}`;
+    }
+    else if(s.kind==='rag') line = `<span class="tag">📚 RAG</span> retrieved ${s.chunks} knowledge chunk(s) → added to context`;
+    else if(s.kind==='tool') line = `<span class="tag">🔧 TOOL</span> called <b>${esc(s.name)}</b>(${esc(JSON.stringify(s.arguments))}) → ${esc(String(s.result))}`;
+    else return;
+    const step = el('step '+cls, line);
+    step.style.animationDelay = (i*0.08)+'s';
+    t.appendChild(step);
+  });
+  logwrap.appendChild(t); scroll();
+}
+
+pdfInput.addEventListener('change', async () => {
+  const file = pdfInput.files[0];
+  if(!file) return;
+  uploadLabel.textContent = 'Parsing…';
+  pdfInput.disabled = true;
+  bubble('you', `📄 uploaded ${file.name}`);
+  try{
+    const buf = await file.arrayBuffer();
+    const b64 = btoa(new Uint8Array(buf).reduce((s,b)=>s+String.fromCharCode(b), ''));
+    const r = await fetch('/api/upload', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({filename: file.name, data_b64: b64})});
+    const data = await r.json();
+    if(data.error){ bubble('bot', '⚠️ '+data.error); }
+    else{
+      renderTrace(data.trace);
+      renderDocPill(data.source, data.n_chunks);
+      bubble('bot', `Indexed **${data.source}** — ${data.n_words} words → ${data.n_chunks} chunks, embedded and searchable. Ask me something about it.`);
+    }
+  }catch(e){ bubble('bot', '⚠️ '+e); }
+  uploadLabel.textContent = 'Upload a PDF';
+  pdfInput.value = '';
+  pdfInput.disabled = false;
+});
+
 async function send(){
   const text = q.value.trim();
   if(!text) return false;
@@ -186,19 +276,7 @@ async function send(){
     think.remove();
 
     // show the trace (what the agent did) BEFORE the answer
-    if(data.trace && data.trace.length){
-      const t = el('trace');
-      data.trace.forEach((s,i)=>{
-        let line;
-        if(s.kind==='rag') line = `<span class="tag">📚 RAG</span> retrieved ${s.chunks} knowledge chunk(s) → added to context`;
-        else if(s.kind==='tool') line = `<span class="tag">🔧 TOOL</span> called <b>${esc(s.name)}</b>(${esc(JSON.stringify(s.arguments))}) → ${esc(String(s.result))}`;
-        else return;
-        const step = el('step '+s.kind, line);
-        step.style.animationDelay = (i*0.12)+'s';
-        t.appendChild(step);
-      });
-      logwrap.appendChild(t); scroll();
-    }
+    renderTrace(data.trace);
     bubble('bot', data.answer || '(no answer)');
   }catch(e){
     think.remove();
@@ -233,11 +311,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "not found", "text/plain")
 
     def do_POST(self):
-        if self.path != "/api/chat":
-            return self._send(404, '{"error":"not found"}')
+        if self.path == "/api/chat":
+            return self._handle_chat()
+        if self.path == "/api/upload":
+            return self._handle_upload()
+        return self._send(404, '{"error":"not found"}')
+
+    def do_DELETE(self):
+        if self.path == "/api/document":
+            return self._handle_delete_document()
+        return self._send(404, '{"error":"not found"}')
+
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    def _handle_chat(self):
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(length) or b"{}")
+            payload = self._read_json()
             msg = (payload.get("message") or "").strip()
             if not msg:
                 return self._send(400, '{"error":"empty message"}')
@@ -247,6 +338,59 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"answer": answer, "trace": trace}))
         except Exception as e:  # never 500 silently
             self._send(200, json.dumps({"answer": f"⚠️ error: {e}", "trace": []}))
+
+    def _handle_upload(self):
+        """PDF upload -> parse -> chunk -> embed -> index, with every step
+        of that pipeline recorded in `trace` so the UI can show it live
+        (this is the point of the demo: make RAG's internals visible)."""
+        try:
+            payload = self._read_json()
+            filename = (payload.get("filename") or "upload.pdf").strip()
+            data_b64 = payload.get("data_b64") or ""
+            if not data_b64:
+                return self._send(400, json.dumps({"error": "no file data received"}))
+
+            pdf_bytes = base64.b64decode(data_b64)
+            trace = []
+
+            text = extract_pdf_text(pdf_bytes)
+            n_words = len(text.split())
+            trace.append({"kind": "doc_parsed", "source": filename, "n_words": n_words})
+
+            if not text.strip():
+                return self._send(200, json.dumps({
+                    "error": ("Couldn't extract any text from this PDF — it may be "
+                              "scanned/image-only (no text layer), which this demo's "
+                              "stdlib-only parser doesn't OCR."),
+                    "trace": trace,
+                }))
+
+            with _lock:
+                if _agent.knowledge is None:
+                    return self._send(400, json.dumps({"error": "RAG is disabled on this agent"}))
+                _agent.knowledge.remove_document(filename)  # replace, don't duplicate
+                added = _agent.knowledge.add_document(filename, text, trace_steps=trace)
+
+            self._send(200, json.dumps({
+                "source": filename,
+                "n_words": n_words,
+                "n_chunks": len(added),
+                "trace": trace,
+            }))
+        except Exception as e:
+            self._send(200, json.dumps({"error": f"upload failed: {e}"}))
+
+    def _handle_delete_document(self):
+        try:
+            payload = self._read_json()
+            source = (payload.get("source") or "").strip()
+            if not source:
+                return self._send(400, json.dumps({"error": "no source given"}))
+            with _lock:
+                removed = _agent.knowledge.remove_document(source) if _agent.knowledge else 0
+            self._send(200, json.dumps({"removed_chunks": removed}))
+        except Exception as e:
+            self._send(200, json.dumps({"error": f"delete failed: {e}"}))
 
 
 def main():

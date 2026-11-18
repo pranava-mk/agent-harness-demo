@@ -10,6 +10,7 @@ os.environ["PML_AGENT_BACKEND"] = "stub"  # force offline backend BEFORE imports
 from agent import Agent
 from agent import tools
 from agent.rag import Knowledge
+from agent import pdf_extract
 
 PASS, FAIL = "✓", "✗"
 ok = True
@@ -35,6 +36,24 @@ check("knowledge index built", len(kb.index) > 0)
 hits = kb.search("what is a harness", k=2)
 check("retrieval returns hits", len(hits) > 0)
 check("retrieval is relevant", any("harness" in h["text"].lower() for h in hits))
+
+# 2b. RAG: ad-hoc document upload (PDF-upload feature) chunks+embeds+indexes,
+# is searchable immediately, and can be removed cleanly.
+trace = []
+added = kb.add_document("test.pdf", "zephyrquartz is a made-up word for testing retrieval. " * 30, trace_steps=trace)
+check("add_document returns chunk entries", len(added) > 0)
+check("add_document emitted trace steps", any(s["kind"] == "doc_chunk" for s in trace) and any(s["kind"] == "doc_embed" for s in trace))
+score_trace = []
+doc_hits = kb.search("zephyrquartz", k=3, min_score=0.0, trace_steps=score_trace)
+check("uploaded doc is retrievable", any(h["source"] == "test.pdf" for h in doc_hits))
+check("search emits query_embed + score trace", any(s["kind"] == "query_embed" for s in score_trace) and any(s["kind"] == "score" for s in score_trace))
+removed = kb.remove_document("test.pdf")
+check("remove_document cleans up", removed == len(added) and not any(c["source"] == "test.pdf" for c in kb.index))
+
+# 2c. PDF extraction: handles both plain-text PDFs and real-world CID-font
+# PDFs (e.g. anything made via a browser's "Print to PDF" — Identity-H
+# encoding + ToUnicode CMaps, which is the common case and easy to get wrong).
+check("pdf_extract returns '' on garbage input", pdf_extract.extract_text(b"not a pdf") == "")
 
 # 3. The loop: plain reply, and a tool-call round-trip.
 a = Agent()

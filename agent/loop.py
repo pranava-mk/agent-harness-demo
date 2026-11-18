@@ -49,7 +49,14 @@ class Agent:
         # 1. OBSERVE — augment the user's turn with retrieved knowledge.
         content = user_text
         if self.knowledge:
-            ctx = self.knowledge.context_for(user_text)
+            score_steps = [] if trace is not None else None
+            ctx = self.knowledge.context_for(user_text, trace_steps=score_steps)
+            if trace is not None and score_steps:
+                # Surface the fine-grained "query embedded -> compared against
+                # each chunk -> scored" steps BEFORE the summary, so a learner
+                # sees the actual retrieval mechanism, not just its outcome.
+                for s in score_steps:
+                    emit(s.pop("kind"), **s)
             if ctx:
                 content = f"{ctx}\n\nQuestion: {user_text}"
                 n = ctx.count("---") + 1
